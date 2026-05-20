@@ -1,31 +1,31 @@
 # Core RAG and orchestration
-langchain==0.3.13
-langchain-community==0.3.13
-langchain-core==0.3.26
+langchain
+langchain-community
+langchain-core
 
 # Vector store
-chromadb==0.5.20
+chromadb
 
 # Embeddings (local)
-sentence-transformers==3.3.1
+sentence-transformers
 
 # PDF processing
-pypdf==5.1.0
+pypdf
 # unstructured==0.16.5
-# unstructured[pdf]==0.16.5  # comment this if you only use pypdf
+# unstructured[pdf]==0.16.5  # comment this if you only use pypdf;
 
 # Token counting
-tiktoken==0.7.0
+tiktoken
 
 # Evaluation
-ragas==0.2.7
-datasets==2.21.0
+ragas
+datasets
 
 # Data handling
-pandas==2.2.2
+pandas
 
-# Optional: if you later use OpenAI API
-openai==1.57.4
+# For later OpenAI use
+openai
 
-# Gradio UI (Week 2-4)
-gradio==4.44.1
+# Gradio UI
+gradio
