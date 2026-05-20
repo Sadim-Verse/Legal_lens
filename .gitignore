@@ -1,0 +1,25 @@
+# .gitignore
+# Virtual environment
+legal-lens-env/
+venv/
+.env/
+
+# Chroma vector store (large binary files)
+chroma_db/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Data files (keep them local if they are large; you might want to include a small sample instead)
+# data/raw/
+# data/processed/
+
+# Environment variables and secrets
+.env
+*.secret
+
+# IDE files
+.vscode/
+.idea/
