@@ -1,0 +1,26 @@
+question,expected_section,expected_document,ideal_answer_fragment,notes
+"Can the government take my life arbitrarily?",33,Constitution,"every person has a right to life",Tests basic right-to-life retrieval
+"Is my life protected under Nigerian law?",33,Constitution,"no person shall be deprived intentionally of his life",Rephrased to plain English
+"Can police enter and search my home without a warrant?",37,Constitution,"privacy of citizens, their homes",Home search — constitutional privacy angle
+"Is it legal for anyone to search my house without permission?",37,Constitution,"no person shall be subjected to the search of his person",Passive phrasing test
+"Am I entitled to a fair trial in Nigeria?",36,Constitution,"every person who is charged with a criminal offence shall be entitled to a fair hearing",Core fair hearing trigger
+"Can a court convict me without hearing my side?",36,Constitution,"fair hearing within a reasonable time",Tests same section from defendant angle
+"Can I freely express my opinions in Nigeria?",39,Constitution,"every person shall be entitled to freedom of expression",Standard freedom of speech trigger
+"Can the government stop me from sharing my views publicly?",39,Constitution,"freedom to hold opinions and to receive and impart ideas",Restriction framing test
+"Can I be tortured by law enforcement in Nigeria?",34,Constitution,"no person shall be subjected to torture or to inhuman or degrading treatment",Direct torture prohibition
+"Is slavery legal in Nigeria?",34,Constitution,"no person shall be held in slavery or servitude",Slavery angle of same section
+"What is chocolate cake?",NOT_LEGAL,NOT_LEGAL,NOT_LEGAL,Nonsense query — should return NOT_LEGAL
+"What is the penalty for cyberstalking in Nigeria?",NOT_LEGAL,NOT_LEGAL,NOT_LEGAL,Statutory criminal law outside indexed corpus
+"How do I apply for a US visa?",NOT_LEGAL,NOT_LEGAL,NOT_LEGAL,Foreign law — hard NOT_LEGAL test
+"What is the speed limit in Lagos?",NOT_LEGAL,NOT_LEGAL,NOT_LEGAL,Traffic regulation — outside corpus
+"Who won the 2023 Nigerian presidential election?",NOT_LEGAL,NOT_LEGAL,NOT_LEGAL,Political/factual query — no legal basis
+"Can a police officer arrest me without a warrant?",38,Police Act,"a police officer may without an order of a court and without a warrant arrest a suspect",Core HyDE test — already validated
+"What are the main duties of the Nigerian Police Force?",4,Police Act,"prevention and detection of crime",Primary functions trigger
+"Can police stop and search my car on the highway?",49,Police Act,"power to search vehicles",Vehicle search powers test
+"What happens if a police officer demands a bribe?",96,Police Act,"corruption or dishonest act",Misconduct/discipline angle
+"Must the police tell me why I am being arrested?",35,Police Act,"shall be informed of the reasons for his arrest",Notification of arrest — rights framing
+"How many hours can my employer legally make me work per day?",13,Labour Act,"hours of work shall not exceed",Working hours — plain employee question
+"Can my employer fire me without giving me notice?",11,Labour Act,"notice of termination of contract",Wrongful termination framing
+"Am I entitled to maternity leave as a female worker in Nigeria?",54,Labour Act,"female employee shall be entitled to maternity leave",Maternity leave entitlement trigger
+"Can a factory legally employ a ten-year-old child?",59,Labour Act,"no child shall be employed or work in any capacity in an industrial undertaking",Child labour prohibition test
+"Does my employer have to give me a written contract?",7,Labour Act,"employer shall give to his employee a written statement",Written contract obligation
