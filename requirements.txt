@@ -1,5 +1,3 @@
-# Replace requirements.txt entirely
-@"
 groq
 langchain-huggingface
 langchain-chroma
@@ -9,4 +7,3 @@ python-dotenv
 tiktoken
 langchain-community
 pypdf
-"@ | Set-Content requirements.txt
