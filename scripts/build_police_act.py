@@ -1,3 +1,6 @@
+# Generate a new text selectable pdf file for the police act
+
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm

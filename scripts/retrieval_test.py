@@ -15,20 +15,37 @@ Changelog vs previous version:
   directly — prevents factual hallucination from drifting the embedding
 - All other logic unchanged
 """
+import os
+os.environ["TQDM_DISABLE"] = "1"
+os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import logging
+# Suppress all HF loggers that may produce the warning
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
 
 import sys
-import os
+import re
+import time
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from groq import Groq
 from sentence_transformers import CrossEncoder
+from dotenv import load_dotenv
+load_dotenv()
 
-# ── Configuration ──────────────────────────────────────────────────────────────
+# Configuration 
 QUERY_INSTRUCTION    = "Represent this sentence for searching relevant passages: "
 EMBEDDING_MODEL      = "BAAI/bge-base-en-v1.5"
 CHROMA_DIR           = "./chroma_db"
 SIMILARITY_THRESHOLD = 0.8
-RERANK_TOP_K         = 10
+RERANK_TOP_K         = 5
 
 VALID_SOURCES = {"Constitution", "Police Act", "Labour Act"}
 
@@ -42,13 +59,13 @@ SPECIFIC_DETAIL_SIGNALS = [
     "what is the penalty", "what fine", "how soon", "within what",
 ]
 
-# ── Groq models ────────────────────────────────────────────────────────────────
+# Groq models 
 CLASSIFIER_MODEL = "llama-3.3-70b-versatile"
 HYDE_MODEL       = "llama-3.1-8b-instant"
 
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
-# ── Lazy-loaded singletons ─────────────────────────────────────────────────────
+#  Lazy-loaded singletons 
 _vectorstore = None
 def get_vectorstore():
     global _vectorstore
@@ -71,7 +88,7 @@ def get_reranker():
     return _reranker
 
 
-# ── Query-type detector ────────────────────────────────────────────────────────
+# Query-type detector
 def requires_specific_detail(question: str) -> bool:
     """
     Returns True if the question asks for a specific statutory fact
@@ -82,20 +99,26 @@ def requires_specific_detail(question: str) -> bool:
     For these questions, raw query embedding is used instead of HyDE.
     """
     lower = question.lower()
-    return any(signal in lower for signal in SPECIFIC_DETAIL_SIGNALS)
+    # Existing signals
+    if any(signal in lower for signal in SPECIFIC_DETAIL_SIGNALS):
+        return True
+    # Section-number reference — "section 36", "s.36", "sec 36"
+    if re.search(r'\bsection\s+\d+\b|\bsec\.?\s*\d+\b|\bs\.\s*\d+\b', lower):
+        return True
+    return False
 
 
-# ── Layer 1: Scope + source + confidence classifier (70B) ─────────────────────
+#  Scope + source + confidence classifier (70B)
 def classify_query(question: str) -> tuple[bool, str | None, str]:
     """
     Two-step chain-of-thought classifier.
 
     Returns: (in_scope, source, confidence)
-      in_scope   : bool       — False → return [] immediately
+      in_scope   : bool       — False -> return [] immediately
       source     : str | None — 'Constitution' | 'Police Act' | 'Labour Act'
-                                 None = UNKNOWN → dual retrieval, no filter
+                                 None = UNKNOWN -> dual retrieval, no filter
       confidence : str        — 'HIGH' | 'LOW'
-                                 LOW → dual retrieval even if source is known
+                                 LOW -> dual retrieval even if source is known
     """
     prompt = f"""You are a Nigerian legal classifier. Reason through two steps
 before giving your final answer.
@@ -129,6 +152,9 @@ CONSTITUTION (1999)
     composition of legislative houses
   ⚠ "Electoral qualifications or governance structure" → IN SCOPE (Constitution)
   ⚠ "Election results or who won an election" → OUT OF SCOPE
+  ⚠ Questions about police SEARCHING a home, dwelling, or private property
+    → IN SCOPE (Constitution, Section 37 — right to privacy) NOT Police Act. 
+    The Police Act covers arrest powers, not the constitutional right to privacy of the home.
 
 POLICE ACT (2020)
   Covers ALL of:
@@ -205,7 +231,7 @@ Answer:"""
         return True, None, "LOW"
 
 
-# ── Layer 2: HyDE clause generator (8B) ───────────────────────────────────────
+# HyDE clause generator (8B) 
 def rewrite_query_legal(user_question: str) -> str:
     """
     Generates a hypothetical Nigerian legal clause for general questions.
@@ -229,8 +255,9 @@ CRITICAL RULES:
 5. Output ONLY the clause. No intro, no commentary, no explanation.
    If uncertain, write the closest plausible clause — never explain why
    you cannot answer.
-6. If the question is about home privacy or searches of a dwelling, use the
-   phrase "The privacy of citizens and their homes" explicitly.
+6. If the question is about refusing a search, home privacy, or searches 
+    of a dwelling, use EXACTLY this phrase: 
+    'The privacy of citizens and their homes shall be inviolable' — do not paraphrase it.
 7. If the question is about religious freedom or being compelled to follow a
    religion, use the phrase "freedom of thought, conscience and religion"
    explicitly.
@@ -261,7 +288,7 @@ Hypothetical Clause:"""
         return user_question
 
 
-# ── Deduplication ──────────────────────────────────────────────────────────────
+# Deduplication 
 def deduplicate(results: list) -> list:
     """
     Removes duplicate chunks by page_content.
@@ -275,7 +302,7 @@ def deduplicate(results: list) -> list:
     return list(seen.values())
 
 
-# ── Layer 3: Cross-encoder reranker ───────────────────────────────────────────
+# Cross-encoder reranker 
 def rerank(question: str, results: list, top_k: int = 5) -> list:
     """
     Re-scores chunks against the ORIGINAL user question.
@@ -291,14 +318,14 @@ def rerank(question: str, results: list, top_k: int = 5) -> list:
     return [(doc, float(score)) for (doc, _), score in scored[:top_k]]
 
 
-# ── Main retrieval function ────────────────────────────────────────────────────
+#  Main retrieval function
 def retrieve(query: str, k: int = 5) -> list:
     """
     Full retrieval pipeline.
     Returns list of (Document, rerank_score) tuples, highest relevance first.
     Returns [] if query is out of scope or no relevant provisions found.
     """
-    # ── 1. Classify ───────────────────────────────────────────────────────────
+    #  - Classify 
     in_scope, source, confidence = classify_query(query)
 
     if not in_scope:
@@ -308,7 +335,7 @@ def retrieve(query: str, k: int = 5) -> list:
     print(f"[INFO] Classified → source: {source or 'ALL (UNKNOWN)'} | "
           f"confidence: {confidence}")
 
-    # ── 2. Query-type detection + embedding ───────────────────────────────────
+    #  - Query-type detection + embedding 
     if requires_specific_detail(query):
         print("[INFO] Specific-detail question — skipping HyDE, embedding raw query.")
         search_query = QUERY_INSTRUCTION + query
@@ -320,7 +347,7 @@ def retrieve(query: str, k: int = 5) -> list:
 
     vs = get_vectorstore()
 
-    # ── 3. Retrieval strategy ─────────────────────────────────────────────────
+    #  - Retrieval strategy 
     use_filter = source is not None and confidence == "HIGH"
 
     if use_filter:
@@ -338,19 +365,96 @@ def retrieve(query: str, k: int = 5) -> list:
         )
         raw_results  = deduplicate(hyde_results + raw_results)
 
-    # ── 4. Distance threshold filter ──────────────────────────────────────────
+    #  - Distance threshold filter
     raw_results = [r for r in raw_results if r[1] < SIMILARITY_THRESHOLD]
 
     if not raw_results:
         print("[INFO] No sufficiently relevant provision found.")
         return []
 
-    # ── 5. Cross-encoder rerank against original query ────────────────────────
+    #  - Cross-encoder rerank against original query ─
     reranked = rerank(query, raw_results, top_k=k)
     return reranked
 
+def retrieve(query: str, k: int = 5) -> list:
+    t0 = time.perf_counter()
 
-# ── CLI ────────────────────────────────────────────────────────────────────────
+    # ── 1. Classify ───────────────────────────────────────────────────────────
+    t1 = time.perf_counter()
+    in_scope, source, confidence = classify_query(query)
+    t2 = time.perf_counter()
+    print(f"[TIMER] classify_query:        {t2-t1:.2f}s")
+
+    if not in_scope:
+        print("[INFO] Query is outside Nigerian legal scope.")
+        print(f"[TIMER] Total (out of scope):   {t2-t0:.2f}s")
+        return []
+
+    print(f"[INFO] Classified → source: {source or 'ALL (UNKNOWN)'} | "
+          f"confidence: {confidence}")
+
+    # ── 2. Query-type detection + embedding ───────────────────────────────────
+    t3 = time.perf_counter()
+    if requires_specific_detail(query):
+        print("[INFO] Specific-detail question — skipping HyDE, embedding raw query.")
+        search_query = QUERY_INSTRUCTION + query
+        hyde_used = False
+    else:
+        legal_query  = rewrite_query_legal(query)
+        print(f"[INFO] Original query : {query}")
+        print(f"[INFO] Rewritten query: {legal_query}\n")
+        search_query = QUERY_INSTRUCTION + legal_query
+        hyde_used = True
+    t4 = time.perf_counter()
+    print(f"[TIMER] HyDE rewrite:          {t4-t3:.2f}s  (skipped={not hyde_used})")
+
+    # ── 3. Vectorstore load + embed + search ──────────────────────────────────
+    t5 = time.perf_counter()
+    vs = get_vectorstore()
+    t6 = time.perf_counter()
+    print(f"[TIMER] get_vectorstore:       {t6-t5:.2f}s")
+
+    use_filter = source is not None and confidence == "HIGH"
+    t7 = time.perf_counter()
+    if use_filter:
+        print(f"[INFO] Strategy: filtered retrieval ({source})")
+        raw_results = vs.similarity_search_with_score(
+            search_query, k=RERANK_TOP_K, filter={"source": source},
+        )
+    else:
+        print("[INFO] Strategy: dual retrieval (HyDE + raw query, all sources)")
+        hyde_results = vs.similarity_search_with_score(search_query, k=RERANK_TOP_K)
+        raw_results  = vs.similarity_search_with_score(
+            QUERY_INSTRUCTION + query, k=RERANK_TOP_K
+        )
+        raw_results  = deduplicate(hyde_results + raw_results)
+    t8 = time.perf_counter()
+    print(f"[TIMER] vector search:         {t8-t7:.2f}s  (strategy={'filtered' if use_filter else 'dual'})")
+
+    # ── 4. Distance threshold filter ──────────────────────────────────────────
+    raw_results = [r for r in raw_results if r[1] < SIMILARITY_THRESHOLD]
+    if not raw_results:
+        print("[INFO] No sufficiently relevant provision found.")
+        print(f"[TIMER] Total:                 {time.perf_counter()-t0:.2f}s")
+        return []
+
+    # ── 5. Cross-encoder rerank ───────────────────────────────────────────────
+    t9 = time.perf_counter()
+    reranked = rerank(query, raw_results, top_k=k)
+    t10 = time.perf_counter()
+    print(f"[TIMER] cross-encoder rerank:  {t10-t9:.2f}s  ({len(raw_results)} candidates)")
+
+    print(f"[TIMER] ── Total retrieve():   {t10-t0:.2f}s ──")
+    return reranked
+
+
+print("[INFO] Pre-loading embedding model and reranker...")
+get_vectorstore()
+get_reranker()
+print("[INFO] Models ready.")
+
+
+# CLI 
 if __name__ == "__main__":
     user_query = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else \
         "Can I be tortured or held as a slave?"
@@ -367,3 +471,4 @@ if __name__ == "__main__":
                   f"Title: {doc.metadata.get('title', '?')}")
             print(doc.page_content[:400])
             print()
+    

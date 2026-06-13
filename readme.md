@@ -1,439 +1,266 @@
-# LegalLens — Nigerian Legal Self-Help RAG System
-## Project Documentation v2.0
-### Last Updated: May 2026
+# ⚖️ LegalLens — Know Your Nigerian Rights
+
+> A retrieval-augmented generation system that answers plain-English questions
+> about Nigerian law, cited directly from statute.
+
+**Live demo:** [Hugging Face Spaces](#) *(link after deployment)*
 
 ---
 
-## 1. Mission & Hard Constraints
+## ⚠️ Disclaimer
 
-### What this project is
-- A demonstrable prototype of a production-minded RAG pipeline.
-- A showcase of the ability to evaluate LLM output, not just generate it.
-- A tool that proves retrieval is not "dump PDF into vector DB and chat."
-
-### What this project is NOT
-- A legal advice platform. A clear disclaimer appears on every screen.
-- A complete solution for all Nigerian laws. Focused on 3 specific documents.
-- A fancy UI exercise. Functional and usable, not beautiful.
-
-### Iron Rule
-The system must correctly answer:
-
-    "Under what section of the Constitution can I refuse a police search without a warrant?"
-
-...with a correct citation and a plain-English explanation. If it cannot, the project has failed.
+This is a technology demonstration, not legal advice.
+Always consult a qualified Nigerian lawyer for your specific situation.
+LegalLens covers only three sources: the Nigerian Constitution (1999),
+the Police Act 2020, and the Labour Act.
 
 ---
 
-## 2. Target Documents
+## What it does
 
-| # | Document | Why |
-|---|----------|-----|
-| 1 | Constitution of the Federal Republic of Nigeria 1999 (as amended) | Highest-impact source; covers all fundamental rights |
-| 2 | Nigeria Police Act 2020 | Rules for arrests, searches, citizen rights during police encounters |
-| 3 | Labour Act Cap. L1 LFN 2004 | Employment contracts, termination, wages, worker protections |
+Ask LegalLens a question in plain English:
 
-**Source:** placng.org / lawsofnigeria.placng.org (text-based PDFs, verified selectable).
+> *"Can the police search my home without a warrant?"*
 
-**Why these three?** They cover the most common legal problems ordinary Nigerians
-face daily: police harassment, wrongful dismissal, and basic rights. They are
-publicly available, heavily structured, and dense — ideal for testing chunking
-and retrieval strategies.
+It finds the relevant Nigerian legal provision, explains it clearly,
+and cites the exact section:
+
+> *"The Constitution guarantees the privacy of citizens and their homes
+> under Section 37 (Right to private and family life). A search without
+> a warrant would be a violation of this constitutional right."*
+>
+> Source: Constitution, Section 37 — Right to private and family life
 
 ---
 
-## 3. Technical Architecture (Actual, as Built)
+## Why this is hard
 
-### Stack Comparison
+Most RAG tutorials connect a PDF to a vector database and call it done.
+Legal text breaks that approach in several ways:
 
-| Component         | Originally Planned          | Actual (as Built)                          |
-|-------------------|-----------------------------|--------------------------------------------|
-| LLM (classify)    | gpt-3.5-turbo               | llama-3.3-70b-versatile (Groq API)         |
-| LLM (HyDE)        | gpt-3.5-turbo               | llama-3.1-8b-instant (Groq API)            |
-| LLM (generation)  | gpt-3.5-turbo               | llama-3.3-70b-versatile (Groq API)         |
-| Embeddings        | all-MiniLM-L6-v2            | BAAI/bge-base-en-v1.5 (local HuggingFace)  |
-| Vector store      | Chroma (local)              | Chroma (local, persistent)                 |
-| Reranker          | Not planned                 | cross-encoder/ms-marco-MiniLM-L-6-v2       |
-| UI                | Gradio                      | Gradio (pending)                           |
-| Evaluation        | ragas                       | Custom eval scripts + ragas (pending)      |
+**The vocabulary gap.** A user asks "Can police search my home?"
+The statute says "The privacy of citizens, their homes... is hereby
+guaranteed and protected." These embed very differently.
+Without bridging that gap, the retriever never finds Section 37.
 
-### Retrieval Pipeline (as Built)
+**Short sections lose to long ones.** Section 37 is 17 words.
+Section 36 (fair hearing) is 856 words across 12 subsections.
+In embedding space, the longer section dominates almost every
+constitutional query — even when it's the wrong answer.
+
+**Hallucination on specific values.** A generative query rewriter
+will invent wrong rank names, wrong percentages, wrong timeframes.
+The fix is not a better prompt — it's detecting which question
+types to skip rewriting for entirely.
+
+---
+
+## Architecture
 
 ```
 User Question
       │
       ▼
-┌──────────────────────────────────────────────────────┐
-│  classify_query()   [Groq 70B]                       │
-│  Two-step chain-of-thought:                          │
-│    Step 1 — Is this a Nigerian legal question?       │
-│    Step 2 — Which of the 3 Acts covers it?           │
-│  Output: (in_scope, source, confidence)              │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  classify_query()   [Groq 70B]              │
+│  Two-step chain-of-thought:                 │
+│  1. Is this a Nigerian legal question?      │
+│  2. Which of the 3 Acts covers it?          │
+│  Output: (in_scope, source, confidence)     │
+└─────────────────────────────────────────────┘
+      │ out_of_scope → "not in sources"
+      ▼
+┌─────────────────────────────────────────────┐
+│  requires_specific_detail()   [local]       │
+│  Detects rank/number/timeframe questions.   │
+│  Skips HyDE for these, to prevent           │
+│  factual hallucination.                     │
+└─────────────────────────────────────────────┘
       │
-      ├── out_of_scope=True → return [] → "not in sources"
+      ├── specific detail → embed raw query
+      │
+      └── general question →
+          rewrite_query_legal()   [Groq 8B]
+          HyDE: hypothetical Nigerian legal
+          clause → closer to corpus embedding
       │
       ▼
-┌──────────────────────────────────────────────────────┐
-│  requires_specific_detail()   [local, no API call]   │
-│  Detects questions about ranks, numbers,             │
-│  percentages, timeframes, years of service.          │
-│  Skips HyDE for these to prevent hallucination.      │
-└──────────────────────────────────────────────────────┘
-      │
-      ├── specific_detail=True → embed raw query directly
-      │
-      └── general question ──►
-          ┌─────────────────────────────────────────┐
-          │  rewrite_query_legal()   [Groq 8B]      │
-          │  HyDE: generates a hypothetical         │
-          │  Nigerian legal clause to improve       │
-          │  embedding proximity to corpus text.    │
-          └─────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  Chroma similarity_search_with_score()      │
+│  HIGH confidence + known source →           │
+│    filtered retrieval (k=5)                 │
+│  LOW confidence or UNKNOWN →                │
+│    dual retrieval: HyDE + raw, merged       │
+└─────────────────────────────────────────────┘
       │
       ▼
-┌──────────────────────────────────────────────────────┐
-│  Chroma similarity_search_with_score()               │
-│                                                      │
-│  Strategy A (HIGH confidence + known source):        │
-│    Filtered single retrieval, k=20                   │
-│                                                      │
-│  Strategy B (LOW confidence or UNKNOWN source):      │
-│    Dual retrieval — HyDE query + raw query,          │
-│    merged and deduplicated, k=20 each                │
-│                                                      │
-│  Cosine distance threshold: < 0.8                    │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  rerank()   [CrossEncoder, local]           │
+│  ms-marco-MiniLM-L-6-v2                     │
+│  Re-scores chunks vs original query        │
+└─────────────────────────────────────────────┘
       │
       ▼
-┌──────────────────────────────────────────────────────┐
-│  rerank()   [local CrossEncoder]                     │
-│  cross-encoder/ms-marco-MiniLM-L-6-v2               │
-│  Re-scores each chunk against the ORIGINAL query.   │
-│  Returns top-5 by relevance logit.                  │
-│  Note: scores are logits (higher = better),         │
-│  NOT cosine distances.                              │
-└──────────────────────────────────────────────────────┘
-      │
-      ▼
-  Retrieved chunks: List[(Document, rerank_score)]
-      │
-      ▼   [GENERATION — to be wired]
-┌──────────────────────────────────────────────────────┐
-│  answer()   [Groq 70B]                               │
-│  Grounded generation from retrieved chunks only.    │
-│  Plain English + exact section citations.           │
-│  Strictly prohibited from using outside knowledge. │
-└──────────────────────────────────────────────────────┘
-      │
-      ▼
-  Gradio UI — response + citations displayed
+┌─────────────────────────────────────────────┐
+│  answer()   [Groq 70B]                      │
+│  Grounded generation — no outside           │
+│  knowledge, exact section citations,        │
+│  plain English                              │
+└─────────────────────────────────────────────┘
 ```
 
-### Key Design Decisions and Rationale
+### Key design decisions
 
-**Why HyDE (Hypothetical Document Embeddings)?**
-A user question like "Can police search my home?" embeds very differently from
-the statutory text "The privacy of citizens and their homes shall be inviolable."
-HyDE bridges this gap by generating a hypothetical clause in statutory language,
-whose embedding is geometrically closer to the actual corpus text.
-
-**Why skip HyDE for specific-detail questions?**
-The 8B model hallucinated specific values (wrong rank names, wrong percentages,
-wrong timeframes) when asked questions like "What is the rank of the officer who
-heads the Complaints Unit?" The hallucinated value drifts the embedding toward
-the wrong section. Raw query embedding is safer for these cases.
-
-**Why a 70B model for classification but 8B for HyDE?**
-Classification is a precision task — wrong decisions block retrieval entirely.
-HyDE is a generative task where approximate stylistic correctness is sufficient.
-The 70B model costs more tokens per call but makes fewer categorical errors.
-
-**Why cross-encoder reranking?**
-Cosine similarity retrieves chunks that are distributionally close to the query
-embedding. A cross-encoder directly scores each (query, chunk) pair for relevance
-— a fundamentally more accurate signal, at the cost of running N forward passes
-instead of one. Used after coarse retrieval to re-order the candidate pool.
-
-**Why fail the classifier closed (out_of_scope → return [])?**
-A false negative (wrongly blocking an in-scope question) is visible and
-recoverable — the user sees "not found" and can rephrase. A false positive
-(allowing an out-of-scope question through) produces a confidently wrong answer
-from a mismatched chunk. The latter is worse for a legal system.
+| Decision | Why |
+|---|---|
+| 70B model for classification | Precision matters — wrong classification blocks retrieval entirely |
+| 8B model for HyDE | Speed matters — stylistic approximation is sufficient |
+| Skip HyDE for specific-detail questions | 8B model hallucinates specific values (ranks, percentages, timeframes) |
+| Chunk enrichment for short sections | 17-word Section 37 was invisible without keyword expansion |
+| Fail classifier closed | False negatives are visible; false positives produce confident wrong answers |
+| Eager model loading | Eliminates 7.7s cold-start penalty on first query |
 
 ---
 
-## 4. Data Preparation (Completed)
+## Corpus
 
-### Cleaning
-- Stripped headers, footers, and page numbers.
-- Removed non-selectable/scanned pages (verified text-based source PDFs).
-
-### Chunking Strategy
-- Split by section boundary using regex patterns.
-- Each section = one chunk, unless > 500 tokens → split at subsection boundaries
-  (e.g., (1), (2), (a), (b)).
-- Minimum chunk size: ~200 tokens to preserve legal context.
-
-### Metadata (per chunk)
-```python
-{
-    "source":         "Constitution" | "Police Act" | "Labour Act",
-    "section_number": int,
-    "title":          str,   # section heading
-}
-```
-
-### Embedding
-- Model: BAAI/bge-base-en-v1.5 (normalized embeddings)
-- Query instruction prepended at search time:
-  "Represent this sentence for searching relevant passages: "
-- Stored in Chroma, persisted to ./chroma_db
-
-### Sanity Checks Performed
-Test queries run manually before any generation work:
-- "right to personal liberty"         → Constitution Sec 35 ✓
-- "unlawful arrest by police"          → Police Act Sec 38 ✓
-- "termination without notice"         → Labour Act Sec 11 ✓
-- "Can I be tortured or held as slave" → Constitution Sec 34 ✓
+| Source | Coverage |
+|---|---|
+| Constitution of the Federal Republic of Nigeria 1999 (as amended) | Fundamental rights, governance structure, legislative qualifications |
+| Nigeria Police Act 2020 | Arrest powers, search, custody, citizen rights, officer misconduct |
+| Labour Act Cap. L1 LFN 2004 | Employment contracts, wages, leave, termination, child labour |
 
 ---
 
-## 5. Generation Prompt (To Be Wired)
+## Evaluation
 
-```python
-SYSTEM_PROMPT = """You are a Nigerian legal information assistant.
-Use ONLY the provided legal excerpts to answer the user's question in
-clear, simple English that a non-lawyer can understand.
+Four evaluation rounds, 85 test questions total.
 
-If the excerpts do not contain the answer, say exactly:
-'I cannot find relevant legal information in my sources for this question.'
+| Test Set | Size | Method | Context Recall |
+|---|---|---|---|
+| Curated Set 1 | 25 | Human-authored (in-corpus knowledge) | 96% |
+| Adversarial Set 2 | 20 | Human-authored (edge cases) | 84% |
+| Blind Set 3 | 20 | NotebookLM — no author corpus access | 85% |
+| Blind Set 4 | 20 | NotebookLM — no author corpus access | 85% |
 
-Rules:
-1. Cite the exact source and section number for every factual claim.
-   Format: (Source, Section N)
-2. Do not add legal interpretation, opinion, or advice beyond what
-   is stated in the excerpts.
-3. Do not use any information from outside the provided excerpts.
-4. Keep the answer under 150 words unless the question genuinely
-   requires more detail.
-5. Never use legal jargon without immediately explaining it in plain
-   English in parentheses.
+**Honest baseline: 85% on blind test sets.**
+The 96% figure on the curated set is inflated by author familiarity
+with the corpus. The NotebookLM figure is the number to cite.
 
-Disclaimer reminder: This is a technology demonstration, not legal
-advice. Always consult a qualified Nigerian lawyer for your specific
-situation."""
-```
+### Documented failure categories
 
----
-
-## 6. Evaluation Strategy
-
-### 6.1 Test Sets (Completed)
-
-| Set | Size | Generation Method | Context Recall |
-|-----|------|-------------------|----------------|
-| Curated Set 1 | 25 questions | Human-authored (in-corpus knowledge) | 96% |
-| Adversarial Set 2 | 20 questions | Human-authored (edge cases, paraphrasing) | 80–84% |
-| Blind Set 3 | 20 questions | NotebookLM (no author corpus access) | 85% |
-| Blind Set 4 | 20 questions | NotebookLM (no author corpus access) | 85% |
-
-**Honest baseline: 85% context recall on blind, grounded test sets.**
-The 96% figure on the curated set is inflated by author familiarity with
-the corpus. The 85% NotebookLM figure is the number to report.
-
-### 6.2 Retrieval Metrics (Pending — ragas)
-
-Target: context_recall > 0.80 on blind test sets.
-Status: Custom evaluation scripts built and validated; ragas integration pending.
-
-Metrics to compute:
-- `context_precision` — what fraction of retrieved chunks are relevant?
-- `context_recall` — what fraction of necessary chunks were retrieved?
-- `context_relevancy` — average relevancy score across queries
-
-### 6.3 Generation Metrics (Pending)
-
-| Metric | Method | Target |
-|--------|--------|--------|
-| Faithfulness | Manual audit — every claim traceable to a chunk | 0 hallucinations |
-| Citation accuracy | Automated section number check | > 90% |
-| Plain language score | 2–3 non-lawyer raters (1–5 scale) | > 3.5 average |
-| Refusal accuracy | Automated on NOT_LEGAL test questions | 100% |
-
-### 6.4 Documented Failure Categories
-
-The following failure patterns have been identified and partially mitigated:
-
-| Failure Type | Root Cause | Mitigation Applied |
+| Failure | Root cause | Mitigation |
 |---|---|---|
-| HyDE hallucination on specific values | 8B model invents rank names, percentages, timeframes | `requires_specific_detail()` skips HyDE |
-| Classifier false negatives | "Debt", "food", "election" keywords trigger wrong exclusions | Chain-of-thought prompt with explicit disambiguation examples |
-| Cross-encoder mis-ranking on adjacent sections | MS MARCO reranker not domain-adapted for Nigerian law | RERANK_TOP_K increased to 20; wider candidate pool |
-| Sec 131/132 boundary confusion | Two adjacent sections cover one topic; chunk boundary falls wrong | Known issue; inspect_chunks diagnostic available |
-| Source misclassification (IGP term → Constitution) | "Term of office" sounds constitutional | Explicit Police Act ⚠ disambiguation added to classifier |
+| HyDE hallucination on specific values | 8B model invents ranks/numbers | `requires_specific_detail()` skips HyDE |
+| Classifier false negatives | "debt", "food", "elections" keywords trigger wrong exclusions | Chain-of-thought prompt with disambiguation examples |
+| Short sections invisible in retrieval | 17-word chunk loses to 856-word chunk | Keyword enrichment appended to short sections |
+| Cross-encoder mis-ranking | MS MARCO reranker not domain-adapted | RERANK_TOP_K tuned; wider candidate pool |
 
 ---
 
-## 7. User Interface (To Be Built)
+## Performance
 
-**Framework:** Gradio Blocks
-**Deployment target:** Hugging Face Spaces
-**Time budget:** 2–3 hours maximum. No CSS work.
+Measured on local CPU (Intel, no GPU):
 
-### Layout
+| Step | Time |
+|---|---|
+| Scope + source classification (Groq 70B) | ~0.9s |
+| HyDE rewriting (Groq 8B) | ~0.5s |
+| Vector search (Chroma, local) | ~0.5s |
+| Cross-encoder rerank (5 candidates, CPU) | ~0.4s |
+| Grounded generation (Groq 70B) | ~0.9s |
+| **Total** | **~3.2s** |
 
-```
-┌──────────────────────────────────────────────────────┐
-│  LegalLens — Nigerian Law Self-Help (Demo)           │
-│                                                      │
-│  ⚠ DISCLAIMER: This is a technology demonstration,  │
-│  not legal advice. Always consult a qualified        │
-│  Nigerian lawyer for your specific situation.        │
-├──────────────────────────────────────────────────────┤
-│                                                      │
-│  [Chat window — scrollable]                          │
-│                                                      │
-│  User:  Can the police search my home without        │
-│         a warrant?                                   │
-│                                                      │
-│  LegalLens:  The privacy of your home is             │
-│  protected under Nigerian law. Generally, no one     │
-│  may search your home without a warrant...           │
-│                                                      │
-│  📄 Source: Constitution, Section 37                 │
-│                                                      │
-├──────────────────────────────────────────────────────┤
-│  [Text input box]                     [Send]         │
-└──────────────────────────────────────────────────────┘
-```
-
-### Behaviour requirements
-- Disclaimer visible at all times (not dismissable)
-- Source citations displayed below every answer
-- "I cannot find relevant legal information" shown for out-of-scope queries
-- No streaming required for prototype (non-streaming generation is fine)
+Models are pre-loaded at startup to eliminate cold-start penalty.
 
 ---
 
-## 8. Logging (To Be Built)
+## Stack
 
-Every query logged to `logs/queries.jsonl` in append mode:
-
-```json
-{
-  "timestamp": "2026-05-23T14:32:01Z",
-  "query": "Can police search my home?",
-  "in_scope": true,
-  "source_classified": "Constitution",
-  "confidence": "HIGH",
-  "hyde_used": true,
-  "rewritten_query": "The privacy of citizens and their homes...",
-  "retrieved_sections": [
-    {"source": "Constitution", "section": 37, "score": 6.42},
-    {"source": "Constitution", "section": 35, "score": 3.11}
-  ],
-  "answer": "The privacy of your home is protected..."
-}
-```
+| Component | Technology |
+|---|---|
+| LLM (classify + generate) | `llama-3.3-70b-versatile` via Groq API |
+| LLM (HyDE rewriting) | `llama-3.1-8b-instant` via Groq API |
+| Embeddings | `BAAI/bge-base-en-v1.5` (local, HuggingFace) |
+| Vector store | Chroma (local, persistent) |
+| Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` (local) |
+| UI | Gradio 5.x |
+| Deployment | Hugging Face Spaces |
 
 ---
 
-## 9. Revised Week-by-Week Status
-
-| Week | Planned Goal | Status |
-|------|--------------|--------|
-| 1 | Ingest, chunk, embed, baseline retrieval, 20-question test set | ✅ Complete and exceeded |
-| 2 | Generation pipeline, Gradio UI, prompt tuning | ⏳ Retrieval far exceeded; generation not yet wired |
-| 3 | ragas metrics, faithfulness audit, hardening, logging | ⏳ Retrieval hardened; ragas and logging pending |
-| 4 | Deployment, README, demo video, GitHub polish | 🔲 Not started |
-
-### Immediate Priorities (Week 4 completion)
-
-In order of dependency:
-
-1. Build `answer()` — Groq 70B, grounded prompt, ~30 lines
-2. Wire `retrieve()` → `answer()` → test on iron rule question
-3. Build Gradio UI — chat window, disclaimer, source display
-4. Run ragas on existing test set CSVs
-5. Manual faithfulness audit on 15 non-edge test questions
-6. Add JSON query logging
-7. Deploy to Hugging Face Spaces (set GROQ_API_KEY as Space secret)
-8. Write README.md and record 2-minute demo screencast
-
----
-
-## 10. Known Limitations (To Be Declared in README)
-
-- Corpus covers only 3 Acts. Questions about CAMA, tax, criminal
-  penalties, cybercrimes, immigration, and other areas will correctly
-  return "not in sources."
-
-- The cross-encoder reranker (ms-marco-MiniLM-L-6-v2) was trained on
-  web search data, not Nigerian legal text. It may mis-rank semantically
-  adjacent statutory sections.
-
-- HyDE generation uses an 8B model that can hallucinate specific statutory
-  values. This is mitigated by the specific-detail detector but not
-  eliminated for all question types.
-
-- Context recall on blind test sets is 85%. One in six questions may
-  retrieve a suboptimal or incorrect section.
-
-- This system is not a substitute for legal advice. It is a technology
-  demonstration of retrieval-augmented generation applied to a high-stakes
-  domain.
-
----
-
-## 11. Pitfalls — Updated Assessment
-
-| Pitfall | Original Mitigation | Current Status |
-|---------|--------------------|-|
-| Tiny chunk size | Section-based chunks, min 200 tokens | ✅ Implemented |
-| Header/footer noise | Regex clean before embedding | ✅ Implemented |
-| Hallucination in generation | Strict grounded prompt | 🔲 Prompt written, not yet tested |
-| Self-evaluation bias | Blind test set scoring | ✅ NotebookLM used; human blind scoring pending |
-| No refusal testing | NOT_LEGAL test questions | ✅ Tested extensively across 4 test sets |
-| Over-engineering | Stay low-level, understand every step | ⚠ Pipeline is complex but fully understood and documentable in an interview |
-
----
-
-## 12. CV Claim (Honest and Earned)
-
-"Engineered a multi-stage legal information retrieval system over Nigerian
-statutes (Constitution, Police Act, Labour Act) featuring HyDE query
-rewriting, a 70B chain-of-thought scope and source classifier, confidence-
-gated dual-retrieval, and cross-encoder reranking. Achieved 85% context
-recall on blind NotebookLM-generated test sets across 4 evaluation rounds.
-Deployed as a Gradio application with grounded generation, zero-hallucination
-target, and full evaluation reporting including faithfulness audit and refusal
-accuracy measurement."
-
----
-
-## 13. Repository Structure
+## Project structure
 
 ```
 Legal_Lens/
+├── app.py                          # Gradio UI entry point
 ├── scripts/
-│   ├── retrieval_test.py      # Full retrieval pipeline (production)
-│   ├── eval_retrieval.py      # Evaluation harness
-│   └── inspect_chunks.py      # Diagnostic — view stored chunk text
+│   ├── retrieval_test.py           # Full retrieval pipeline
+│   ├── generation.py               # Grounded generation
+│   ├── build_police_act.py         # Convert the current police act pdf into a text selectable one
+│   ├── clean_and_chunk.py          # PDF cleaning and section parsing
+│   ├── clean_police_act.py         # PDF cleaning and section parsing for Police act
+│   ├── clean_labour_act.py         # PDF cleaning and section parsing for Labour act
+│   ├── embed_and_index.py          # Chunking, enrichment, and indexing
+│   └── eval_retrieval.py           # Evaluate csv files of test questions
 ├── test_set/
-│   ├── test_questions.csv     # Curated set 1 (25 questions)
-│   ├── test_questions_2.csv   # Adversarial set 2 (20 questions)
-│   ├── test_questions_3.csv   # Blind set 3 — NotebookLM (20 questions)
-│   └── test_questions_4.csv   # Blind set 4 — NotebookLM (20 questions)
-├── chroma_db/                 # Persisted Chroma vector store
-├── logs/
-│   └── queries.jsonl          # Query log (to be implemented)
-├── app.py                     # Gradio UI entry point (to be built)
+│   ├── test_questions.csv          # Curated set (25 questions)
+│   ├── test_questions_2.csv        # Adversarial set (20 questions)
+│   ├── test_questions_3.csv        # Blind set 3 — NotebookLM
+│   └── test_questions_4.csv        # Blind set 4 — NotebookLM
+├── data/
+│   ├── raw/                        # Original PDFs
+│   └── cleaned/                    # Parsed section JSONs
+├── chroma_db/                      # Persisted vector store
 ├── requirements.txt
+├── .env                            # Local only — never committed
 └── README.md
 ```
 
 ---
 
-*End of documentation. Version 2.0. For questions about technical decisions,
-refer to the project development log maintained alongside this document.*
+## Local setup
+
+```bash
+# Clone the repository
+git clone https://github.com/Sadim-Verse/legallens
+cd legallens
+
+# Create and activate virtual environment
+python -m venv env
+source env/bin/activate        # Windows: env\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Set your Groq API key
+echo "GROQ_API_KEY=your_key_here" > .env
+
+# Run the app
+python app.py
+```
+
+Get a free Groq API key at [console.groq.com](https://console.groq.com).
+
+---
+
+## Known limitations
+
+- Corpus covers only 3 Acts. Questions about CAMA, tax, criminal
+  penalties, cybercrimes, and immigration correctly return
+  "not in sources."
+- The cross-encoder reranker was trained on web search data, not
+  Nigerian legal text. It may mis-rank semantically adjacent sections.
+- Context recall is 85% on blind test sets — one in six questions
+  may retrieve a suboptimal section.
+- This system is not a substitute for legal advice.
+
+---
+
+## Author
+
+Built by [Ibraheem](https://github.com/Sadim-Verse) —
+CS student at Osun State University, ML & Game AI developer.
+
+*Interested in the intersection of AI, African contexts,
+and political economy.*
