@@ -17,7 +17,7 @@ Check out the configuration reference at https://huggingface.co/docs/hub/spaces-
 > A retrieval-augmented generation system that answers plain-English questions
 > about Nigerian law, cited directly from statute.
 
-**Live demo:** [Hugging Face Spaces](#) *(link after deployment)*
+**Live demo:** [huggingface.co/spaces/Sad1m/legallens](https://huggingface.co/spaces/Sad1m/legallens)
 
 ---
 
