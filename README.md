@@ -1,13 +1,5 @@
----
-title: Legallens
-emoji: 🏢
-colorFrom: indigo
-colorTo: yellow
-sdk: gradio
-sdk_version: 6.18.0
-python_version: '3.13'
-app_file: app.py
-pinned: false
----
+﻿# LegalLens - Know Your Nigerian Rights
 
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+Live demo: https://huggingface.co/spaces/Sad1m/legallens
+
+A RAG system that answers plain-English questions about Nigerian law.
