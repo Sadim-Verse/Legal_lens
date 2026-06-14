@@ -12,13 +12,6 @@ from scripts.generation import answer
 load_dotenv()
 
 import os
-import subprocess
-
-# Rebuild chroma_db if missing (Hugging Face Spaces — no binary files committed)
-if not os.path.exists("chroma_db") or not any(os.scandir("chroma_db")):
-    print("[INFO] chroma_db not found — rebuilding from cleaned JSON files...")
-    subprocess.run(["python", "scripts/embed_and_index.py"], check=True)
-    print("[INFO] chroma_db rebuilt successfully.")
 
 TITLE = "LegalLens — Know Your Nigerian Rights"
 
