@@ -259,8 +259,8 @@ Get a free Groq API key at [console.groq.com](https://console.groq.com).
 
 ## Author
 
-Built by [Ibraheem](https://github.com/Sadim-Verse) —
-CS student at Osun State University, ML & Game AI developer.
+Built by [Ibraheem](https://github.com/Sadim-Verse),
+CS student, ML & Game AI developer.
 
 *Interested in the intersection of AI, African contexts,
 and political economy.*
